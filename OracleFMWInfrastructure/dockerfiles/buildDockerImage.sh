@@ -4,10 +4,9 @@
 # Author: monica.riccelli@oracle.com
 # Description: script to build a Docker image for FMW Infrastructure
 #
-# DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS HEADER.
+#Copyright (c) 2019, 2020, Oracle and/or its affiliates.
 #
-# Copyright (c) 2014-2018 Oracle and/or its affiliates. All rights reserved.
-#
+#Licensed under the Universal Permissive License v 1.0 as shown at https://oss.oracle.com/licenses/upl.
 
 usage() {
 cat << EOF
@@ -24,7 +23,7 @@ Parameters:
 
 LICENSE UPL 1.0
 
-Copyright (c) 2018 Oracle and/or its affiliates. All rights reserved.
+Copyright (c) 2019, 2020, Oracle and/or its affiliates.
 
 EOF
 exit 0
@@ -35,7 +34,7 @@ exit 0
 if [ "$#" -eq 0 ]; then usage; fi
 
 # Parameters
-VERSION="12.2.1.2"
+VERSION="12.2.1.4"
 SKIPMD5=0
 NOCACHE=true
 
@@ -70,7 +69,11 @@ echo "Image name: " $IMAGE_NAME
 # Validate packages
 checksumPackages() {
   echo "Checking if required packages are present and valid..."
-  md5sum -c Checksum
+  MD5CMD="md5sum -c Checksum"
+  if ! [ -x "$(command -v md5sum)" ]; then
+    MD5CMD="docker run -it --rm -v$(pwd):/md5dir oracle/serverjre:8 sh -c cd /md5dir; ${MD5CMD}"
+  fi
+  $MD5CMD
   if [ "$?" -ne 0 ]; then
     echo "MD5 for required packages to build this image did not match!"
     echo "Make sure to download missing files in folder $VERSION. See *.download files for more information"

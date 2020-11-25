@@ -79,16 +79,6 @@ EOF
    lsnrctl stop
 }
 
-########### SIGKILL handler ############
-function _kill() {
-   echo "SIGKILL received, shutting down database!"
-   sqlplus / as sysdba <<EOF
-   shutdown abort;
-   exit;
-EOF
-   lsnrctl stop
-}
-
 ###################################
 # !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! #
 ############# MAIN ################
@@ -107,26 +97,34 @@ if [ `cat /sys/fs/cgroup/memory/memory.limit_in_bytes | wc -c` -lt 11 ]; then
    fi;
 fi;
 
+# Check that hostname doesn't container any "_"
+# Github issue #711
+if hostname | grep -q "_"; then
+   echo "Error: The hostname must not container any '_'".
+   echo "Your current hostname is '$(hostname)'"
+fi;
+
 # Set SIGINT handler
 trap _int SIGINT
 
 # Set SIGTERM handler
 trap _term SIGTERM
 
-# Set SIGKILL handler
-trap _kill SIGKILL
-
 # Default for ORACLE SID
 if [ "$ORACLE_SID" == "" ]; then
    export ORACLE_SID=ORCLCDB
 else
+  # Make ORACLE_SID upper case
+  # Github issue # 984
+  export ORACLE_SID=${ORACLE_SID^^}
+
   # Check whether SID is no longer than 12 bytes
   # Github issue #246: Cannot start OracleDB image
   if [ "${#ORACLE_SID}" -gt 12 ]; then
      echo "Error: The ORACLE_SID must only be up to 12 characters long."
      exit 1;
   fi;
-  
+
   # Check whether SID is alphanumeric
   # Github issue #246: Cannot start OracleDB image
   if [[ "$ORACLE_SID" =~ [^a-zA-Z0-9] ]]; then
@@ -137,6 +135,10 @@ fi;
 
 # Default for ORACLE PDB
 export ORACLE_PDB=${ORACLE_PDB:-ORCLPDB1}
+
+# Make ORACLE_PDB upper case
+# Github issue # 984
+export ORACLE_PDB=${ORACLE_PDB^^}
 
 # Default for ORACLE CHARACTERSET
 export ORACLE_CHARACTERSET=${ORACLE_CHARACTERSET:-AL32UTF8}

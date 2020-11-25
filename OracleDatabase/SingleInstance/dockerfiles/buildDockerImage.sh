@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -e
 # 
 # Since: April, 2016
 # Author: gerald.venzl@oracle.com
@@ -6,7 +6,7 @@
 # 
 # DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS HEADER.
 # 
-# Copyright (c) 2014-2017 Oracle and/or its affiliates. All rights reserved.
+# Copyright (c) 2014-2019 Oracle and/or its affiliates. All rights reserved.
 # 
 
 usage() {
@@ -28,47 +28,86 @@ Parameters:
 
 LICENSE UPL 1.0
 
-Copyright (c) 2014-2018 Oracle and/or its affiliates. All rights reserved.
+Copyright (c) 2014-2019 Oracle and/or its affiliates. All rights reserved.
 
 EOF
-  exit 0
+
 }
 
 # Validate packages
 checksumPackages() {
   if hash md5sum 2>/dev/null; then
-    echo "Checking if required packages are present and valid..."
-    md5sum -c Checksum.$EDITION
-    if [ "$?" -ne 0 ]; then
+    echo "Checking if required packages are present and valid..."   
+    if ! md5sum -c "Checksum.$EDITION"; then
       echo "MD5 for required packages to build this image did not match!"
       echo "Make sure to download missing files in folder $VERSION."
-      exit $?
+      exit 1;
     fi
   else
     echo "Ignored MD5 sum, 'md5sum' command not available.";
   fi
 }
 
+# Check Podman version
+checkPodmanVersion() {
+  # Get Podman version
+  echo "Checking Podman version."
+  PODMAN_VERSION=$(docker info --format '{{.host.BuildahVersion}}')
+  # Remove dot in Podman version
+  PODMAN_VERSION=${PODMAN_VERSION//./}
+
+  if [ -z "$PODMAN_VERSION" ]; then
+    exit 1;
+  elif [ "$PODMAN_VERSION" -lt "${MIN_PODMAN_VERSION//./}" ]; then
+    echo "Podman version is below the minimum required version $MIN_PODMAN_VERSION"
+    echo "Please upgrade your Podman installation to proceed."
+    exit 1;
+  fi
+}
+
+# Check Docker version
+checkDockerVersion() {
+  # Get Docker Server version
+  echo "Checking Docker version."
+  DOCKER_VERSION=$(docker version --format '{{.Server.Version | printf "%.5s" }}'|| exit 0)
+  # Remove dot in Docker version
+  DOCKER_VERSION=${DOCKER_VERSION//./}
+
+  if [ -z "$DOCKER_VERSION" ]; then
+    # docker could be aliased to podman and errored out (https://github.com/containers/libpod/pull/4608)
+    checkPodmanVersion
+  elif [ "$DOCKER_VERSION" -lt "${MIN_DOCKER_VERSION//./}" ]; then
+    echo "Docker version is below the minimum required version $MIN_DOCKER_VERSION"
+    echo "Please upgrade your Docker installation to proceed."
+    exit 1;
+  fi;
+}
+
 ##############
 #### MAIN ####
 ##############
-
-if [ "$#" -eq 0 ]; then
-  usage;
-fi
 
 # Parameters
 ENTERPRISE=0
 STANDARD=0
 EXPRESS=0
-VERSION="18.3.0"
+VERSION="19.3.0"
 SKIPMD5=0
 DOCKEROPS=""
+MIN_DOCKER_VERSION="17.09"
+MIN_PODMAN_VERSION="1.6.0"
+DOCKERFILE="Dockerfile"
+
+if [ "$#" -eq 0 ]; then
+  usage;
+  exit 1;
+fi
 
 while getopts "hesxiv:o:" optname; do
   case "$optname" in
     "h")
       usage
+      exit 0;
       ;;
     "i")
       SKIPMD5=1
@@ -99,6 +138,8 @@ while getopts "hesxiv:o:" optname; do
   esac
 done
 
+checkDockerVersion
+
 # Which Edition should be used?
 if [ $((ENTERPRISE + STANDARD + EXPRESS)) -gt 1 ]; then
   usage
@@ -107,8 +148,9 @@ elif [ $ENTERPRISE -eq 1 ]; then
 elif [ $STANDARD -eq 1 ]; then
   EDITION="se2"
 elif [ $EXPRESS -eq 1 ]; then
-  if [ "$VERSION" == "18.3.0" ]; then
+  if [ "$VERSION" == "18.4.0" ]; then
     EDITION="xe"
+    SKIPMD5=1
   elif [ "$VERSION" == "11.2.0.2" ]; then
     EDITION="xe"
     DOCKEROPS="--shm-size=1G $DOCKEROPS";
@@ -116,13 +158,21 @@ elif [ $EXPRESS -eq 1 ]; then
     echo "Version $VERSION does not have Express Edition available.";
     exit 1;
   fi;
-fi
+fi;
+
+# Which Dockerfile should be used?
+if [ "$VERSION" == "12.1.0.2" ] || [ "$VERSION" == "11.2.0.2" ] || [ "$VERSION" == "18.4.0" ]; then
+  DOCKERFILE="$DOCKERFILE.$EDITION"
+fi;
 
 # Oracle Database Image Name
 IMAGE_NAME="oracle/database:$VERSION-$EDITION"
 
 # Go into version folder
-cd $VERSION
+cd "$VERSION" || {
+  echo "Could not find version directory '$VERSION'";
+  exit 1;
+}
 
 if [ ! "$SKIPMD5" -eq 1 ]; then
   checksumPackages
@@ -163,17 +213,22 @@ echo "Building image '$IMAGE_NAME' ..."
 
 # BUILD THE IMAGE (replace all environment variables)
 BUILD_START=$(date '+%s')
-docker build --force-rm=true --no-cache=true $DOCKEROPS $PROXY_SETTINGS -t $IMAGE_NAME -f Dockerfile.$EDITION . || {
+docker build --force-rm=true --no-cache=true \
+       $DOCKEROPS $PROXY_SETTINGS --build-arg DB_EDITION=$EDITION \
+       -t $IMAGE_NAME -f $DOCKERFILE . || {
   echo ""
   echo "ERROR: Oracle Database Docker Image was NOT successfully created."
   echo "ERROR: Check the output and correct any reported problems with the docker build operation."
   exit 1
 }
-echo ""
+
+# Remove dangling images (intermitten images with tag <none>)
+yes | docker image prune > /dev/null
 
 BUILD_END=$(date '+%s')
 BUILD_ELAPSED=`expr $BUILD_END - $BUILD_START`
 
+echo ""
 echo ""
 
 cat << EOF
